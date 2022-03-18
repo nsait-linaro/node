@@ -24,7 +24,7 @@ namespace internal {
 
 namespace {
 
-void DisposeCompilationJob(OptimizedCompilationJob* job,
+void DisposeCompilationJob(TurbofanCompilationJob* job,
                            bool restore_function_code) {
   if (restore_function_code) {
     Handle<JSFunction> function = job->compilation_info()->closure();
@@ -58,18 +58,11 @@ class OptimizingCompileDispatcher::CompileTask : public CancelableTask {
  private:
   // v8::Task overrides.
   void RunInternal() override {
-#ifdef V8_RUNTIME_CALL_STATS
-    WorkerThreadRuntimeCallStatsScope runtime_call_stats_scope(
-        worker_thread_runtime_call_stats_);
-    LocalIsolate local_isolate(isolate_, ThreadKind::kBackground,
-                               runtime_call_stats_scope.Get());
-#else   // V8_RUNTIME_CALL_STATS
     LocalIsolate local_isolate(isolate_, ThreadKind::kBackground);
-#endif  // V8_RUNTIME_CALL_STATS
     DCHECK(local_isolate.heap()->IsParked());
 
     {
-      RCS_SCOPE(runtime_call_stats_scope.Get(),
+      RCS_SCOPE(&local_isolate,
                 RuntimeCallCounterId::kOptimizeBackgroundDispatcherJob);
 
       TimerEventScope<TimerEventRecompileConcurrent> timer(isolate_);
@@ -103,18 +96,18 @@ OptimizingCompileDispatcher::~OptimizingCompileDispatcher() {
   DeleteArray(input_queue_);
 }
 
-OptimizedCompilationJob* OptimizingCompileDispatcher::NextInput(
+TurbofanCompilationJob* OptimizingCompileDispatcher::NextInput(
     LocalIsolate* local_isolate) {
   base::MutexGuard access_input_queue_(&input_queue_mutex_);
   if (input_queue_length_ == 0) return nullptr;
-  OptimizedCompilationJob* job = input_queue_[InputQueueIndex(0)];
+  TurbofanCompilationJob* job = input_queue_[InputQueueIndex(0)];
   DCHECK_NOT_NULL(job);
   input_queue_shift_ = InputQueueIndex(1);
   input_queue_length_--;
   return job;
 }
 
-void OptimizingCompileDispatcher::CompileNext(OptimizedCompilationJob* job,
+void OptimizingCompileDispatcher::CompileNext(TurbofanCompilationJob* job,
                                               LocalIsolate* local_isolate) {
   if (!job) return;
 
@@ -136,7 +129,7 @@ void OptimizingCompileDispatcher::CompileNext(OptimizedCompilationJob* job,
 
 void OptimizingCompileDispatcher::FlushOutputQueue(bool restore_function_code) {
   for (;;) {
-    OptimizedCompilationJob* job = nullptr;
+    TurbofanCompilationJob* job = nullptr;
     {
       base::MutexGuard access_output_queue_(&output_queue_mutex_);
       if (output_queue_.empty()) return;
@@ -151,7 +144,7 @@ void OptimizingCompileDispatcher::FlushOutputQueue(bool restore_function_code) {
 void OptimizingCompileDispatcher::FlushInputQueue() {
   base::MutexGuard access_input_queue_(&input_queue_mutex_);
   while (input_queue_length_ > 0) {
-    OptimizedCompilationJob* job = input_queue_[InputQueueIndex(0)];
+    TurbofanCompilationJob* job = input_queue_[InputQueueIndex(0)];
     DCHECK_NOT_NULL(job);
     input_queue_shift_ = InputQueueIndex(1);
     input_queue_length_--;
@@ -203,7 +196,7 @@ void OptimizingCompileDispatcher::InstallOptimizedFunctions() {
   HandleScope handle_scope(isolate_);
 
   for (;;) {
-    OptimizedCompilationJob* job = nullptr;
+    TurbofanCompilationJob* job = nullptr;
     {
       base::MutexGuard access_output_queue_(&output_queue_mutex_);
       if (output_queue_.empty()) return;
@@ -220,7 +213,7 @@ void OptimizingCompileDispatcher::InstallOptimizedFunctions() {
       }
       DisposeCompilationJob(job, false);
     } else {
-      Compiler::FinalizeOptimizedCompilationJob(job, isolate_);
+      Compiler::FinalizeTurbofanCompilationJob(job, isolate_);
     }
   }
 }
@@ -234,7 +227,7 @@ bool OptimizingCompileDispatcher::HasJobs() {
 }
 
 void OptimizingCompileDispatcher::QueueForOptimization(
-    OptimizedCompilationJob* job) {
+    TurbofanCompilationJob* job) {
   DCHECK(IsQueueAvailable());
   {
     // Add job to the back of the input queue.
